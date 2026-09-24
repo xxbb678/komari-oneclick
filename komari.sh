@@ -229,6 +229,33 @@ enable_offline_auto() {
     fi
 }
 
+# ---------- 延迟监测全局化 ----------
+enable_ping_allclients() {
+    local tag="# KOMARI-V1-PINGAC"
+    local f="$WORK_DIR/check_ping_allclients.sh"
+    [ -f "$f" ] || { warning "未找到 $f，跳过延迟监测全局化配置"; return 0; }
+    chmod +x "$f"
+    command -v sqlite3 >/dev/null 2>&1 || {
+        info "安装 sqlite3..."
+        (command -v apt-get >/dev/null && apt-get update -qq >/dev/null 2>&1 && apt-get install -y -qq sqlite3 >/dev/null 2>&1) || \
+        (command -v yum >/dev/null && yum install -y -q sqlite >/dev/null 2>&1) || \
+        (command -v apk >/dev/null && apk add --no-interactive sqlite >/dev/null 2>&1) || \
+        warning "sqlite3 安装失败，延迟监测全局化不可用"
+    }
+    sleep 4
+    if bash "$f" 2>/dev/null; then
+        info "延迟监测已设为对所有机器生效"
+    else
+        warning "数据库未就绪或 sqlite3 不可用，将由每分钟 cron 自动补齐"
+    fi
+    ( crontab -l 2>/dev/null | grep -vF "$tag"; printf '%s\n' "* * * * * /bin/bash $f >/dev/null 2>&1 $tag" ) | crontab -
+    if crontab -l | grep -qF "$tag"; then
+        success "延迟监测自动全局化已配置 (每分钟, 新任务也自动对所有机器生效)"
+    else
+        warning "cron 写入失败, 可手动执行: bash $f"
+    fi
+}
+
 # ---------- 卸载 ----------
 uninstall() {
     echo -e "\n${RED}==== 卸载 Komari ====${NC}"
@@ -253,6 +280,7 @@ menu_install() {
     input_variables
     start_service
     enable_offline_auto
+    enable_ping_allclients
     config_cron
 }
 
