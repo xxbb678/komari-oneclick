@@ -201,6 +201,34 @@ config_cron() {
     fi
 }
 
+# ---------- 离线通知自动开启 ----------
+enable_offline_auto() {
+    local tag="# KOMARI-V1-OFFLINE"
+    local f="$WORK_DIR/check_offline_auto.sh"
+    [ -f "$f" ] || { warning "未找到 $f，跳过离线通知自动开启配置"; return 0; }
+    chmod +x "$f"
+    command -v sqlite3 >/dev/null 2>&1 || {
+        info "安装 sqlite3..."
+        (command -v apt-get >/dev/null && apt-get update -qq >/dev/null 2>&1 && apt-get install -y -qq sqlite3 >/dev/null 2>&1) || \
+        (command -v yum >/dev/null && yum install -y -q sqlite >/dev/null 2>&1) || \
+        (command -v apk >/dev/null && apk add --no-interactive sqlite >/dev/null 2>&1) || \
+        warning "sqlite3 安装失败，离线通知自动开启不可用"
+    }
+    # 首次启动容器可能尚未建库, 稍候再启用现有机器
+    sleep 4
+    if bash "$f" 2>/dev/null; then
+        info "已为当前机器启用离线通知"
+    else
+        warning "数据库未就绪或 sqlite3 不可用，将由每分钟 cron 自动补齐"
+    fi
+    ( crontab -l 2>/dev/null | grep -vF "$tag"; printf '%s\n' "* * * * * /bin/bash $f >/dev/null 2>&1 $tag" ) | crontab -
+    if crontab -l | grep -qF "$tag"; then
+        success "离线通知自动开启已配置 (每分钟检查新机器)"
+    else
+        warning "cron 写入失败, 可手动执行: bash $f"
+    fi
+}
+
 # ---------- 卸载 ----------
 uninstall() {
     echo -e "\n${RED}==== 卸载 Komari ====${NC}"
@@ -224,6 +252,7 @@ menu_install() {
     prepare_files
     input_variables
     start_service
+    enable_offline_auto
     config_cron
 }
 
