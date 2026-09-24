@@ -182,6 +182,41 @@ start_service() {
     echo -e "保存后等待 30 秒，即可访问 ${GREEN}https://$ARGO_DOMAIN${NC}"
 }
 
+# ---------- 修复 PurCarte 登录过期后进入 404 ----------
+fix_purcarte_login_redirect() {
+    local theme_file="$WORK_DIR/data/theme/PurCarte/dist/index.html"
+    local marker="KOMARI_LOGIN_REDIRECT"
+    local patch='<script>/* KOMARI_LOGIN_REDIRECT */if(location.pathname==="/login"||location.pathname.startsWith("/login/")){location.replace("/admin");}</script>'
+
+    [ -f "$theme_file" ] || {
+        info "未安装 PurCarte 主题，跳过登录过期 404 修复"
+        return 0
+    }
+
+    if grep -qF "$marker" "$theme_file"; then
+        info "PurCarte 登录过期 404 修复已存在"
+        return 0
+    fi
+
+    cp -a "$theme_file" "$theme_file.bak-login-redirect" 2>/dev/null || true
+    python3 - "$theme_file" "$patch" <<'PY'
+import sys
+from pathlib import Path
+p = Path(sys.argv[1])
+patch = sys.argv[2]
+s = p.read_text()
+if "KOMARI_LOGIN_REDIRECT" not in s:
+    s = s.replace("<head>", "<head>" + patch, 1)
+    p.write_text(s)
+PY
+
+    if grep -qF "$marker" "$theme_file"; then
+        success "PurCarte 登录过期 404 修复已应用"
+    else
+        warning "PurCarte 登录过期 404 修复应用失败"
+    fi
+}
+
 # ---------- cron 备份 ----------
 config_cron() {
     info "当前工作目录: $WORK_DIR"
@@ -279,6 +314,7 @@ menu_install() {
     prepare_files
     input_variables
     start_service
+    fix_purcarte_login_redirect
     enable_offline_auto
     enable_ping_allclients
     config_cron
