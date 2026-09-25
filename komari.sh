@@ -291,6 +291,54 @@ enable_ping_allclients() {
     fi
 }
 
+# ---------- 自动更新 Komari ----------
+# 对比本地运行镜像与远程 latest，有新版才重建容器
+update_service() {
+    local current remote
+    cd "$WORK_DIR" || { error "无法进入 $WORK_DIR"; return 1; }
+    info "正在拉取最新镜像..."
+    if ! retry 3 docker pull ghcr.io/komari-monitor/komari:latest; then
+        error "拉取镜像失败，请检查网络或 docker 状态"; return 1
+    fi
+    current=$(docker inspect komari --format '{{.Image}}' 2>/dev/null || echo none)
+    remote=$(docker image inspect ghcr.io/komari-monitor/komari:latest --format '{{.Id}}' 2>/dev/null || echo none)
+    if [ -n "$current" ] && [ "$current" = "$remote" ]; then
+        success "已是最新版本，无需更新 (容器未重启)"
+        return 0
+    fi
+    info "检测到新版本，正在重建容器..."
+    if docker compose up -d; then
+        success "Komari 已更新并重启"
+    else
+        error "更新失败，容器可能仍为旧版本"; return 1
+    fi
+}
+
+# 配置每日自动更新 cron
+config_update_cron() {
+    local tag="# KOMARI-V1-UPDATE"
+    local f="$WORK_DIR/komari.sh"
+    read -r -p $'是否开启每日自动更新 Komari? (每天 04:30 检查, 有新版本才重启) [y/N] ' ans || ans=n
+    if [[ "$ans" =~ [Yy] ]]; then
+        local cronline="30 4 * * * export TZ=Asia/Shanghai; /bin/bash \"$f\" --update >/dev/null 2>&1 $tag"
+        ( crontab -l 2>/dev/null | grep -vF "$tag"; printf '%s\n' "$cronline" ) | crontab -
+        if crontab -l | grep -qF "$tag"; then
+            success "每日自动更新已配置 (每天 04:30)"
+        else
+            warning "cron 写入失败，可手动执行: $f --update"
+        fi
+    else
+        info "未启用自动更新"
+    fi
+}
+
+# 关闭每日自动更新 cron
+disable_update_cron() {
+    local tag="# KOMARI-V1-UPDATE"
+    crontab -l 2>/dev/null | grep -vF "$tag" | crontab - || true
+    success "已关闭每日自动更新"
+}
+
 # ---------- 卸载 ----------
 uninstall() {
     echo -e "\n${RED}==== 卸载 Komari ====${NC}"
@@ -335,6 +383,26 @@ menu_info() {
     echo -e "    -e http://<你的域名>/ -t <面板里生成的节点Token>"
 }
 
+menu_update() {
+    echo -e "\n${BLUE}==== 自动更新 ====${NC}"
+    info "更新脚本自身 (从 GitHub 拉取最新 komari.sh)..."
+    prepare_files >/dev/null 2>&1 || true
+    update_service
+    echo -e "\n${BLUE}▍每日自动更新${NC}"
+    read -r -p $'是否开启每日自动更新? (每天 04:30) [y/N] ' ans || ans=n
+    if [[ "$ans" =~ [Yy] ]]; then
+        config_update_cron
+    else
+        disable_update_cron
+    fi
+}
+
+update_service_standalone() {
+    # 供 cron 或命令行 --update 调用：仅更新脚本/镜像，不带交互
+    prepare_files >/dev/null 2>&1 || true
+    update_service
+}
+
 main() {
     clear
     while true; do
@@ -344,6 +412,7 @@ ${BLUE}════════ Komari 一键脚本 ════════${NC
   ${GREEN}2)${NC} 查看信息
   ${GREEN}3)${NC} 立即备份到 GitHub
   ${GREEN}4)${NC} 重新配置备份参数
+  ${YELLOW}u)${NC} 自动更新 (检查并更新面板 + 配置每日更新)
   ${RED}5)${NC} 卸载
   ${GREEN}0)${NC} 退出
 ${BLUE}════════════════════════════════${NC}"
@@ -353,6 +422,7 @@ ${BLUE}════════════════════════�
             2) menu_info ;;
             3) "$BACKUP_SCRIPT" backup ;;
             4) cd "$WORK_DIR" 2>/dev/null; input_variables ; echo "备份配置已更新" ;;
+            u|U) menu_update ;;
             5) uninstall ;;
             0) break ;;
             *) warning "无效选项"; sleep 1 ;;
@@ -360,4 +430,9 @@ ${BLUE}════════════════════════�
         echo; read -r -p "按回车返回菜单..." _ 2>/dev/null || true
     done
 }
+
+if [ "${1:-}" = "--update" ]; then
+    update_service_standalone
+    exit $?
+fi
 main
