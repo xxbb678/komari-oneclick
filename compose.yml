@@ -6,6 +6,9 @@ services:
     environment:
       ADMIN_USERNAME: ${ADMIN_USERNAME}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+      # 通知模板 {{time}} 用 Go 的 time.Local 渲染，未设 TZ 时容器为 UTC，
+      # 通知时间会比北京时间慢 8 小时。
+      TZ: ${TZ:-Asia/Shanghai}
     volumes:
       - ./data:/app/data
     expose:
